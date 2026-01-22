@@ -1,0 +1,138 @@
+import cv2 as cv
+import mediapipe as mp
+import serial
+import time
+import math
+
+
+arduino = serial.Serial(port='COM4', baudrate=9600, timeout=0.1)
+time.sleep(2)
+
+
+cap = cv.VideoCapture(0)
+cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+
+
+mp_drawing = mp.solutions.drawing_utils
+mp_hands = mp.solutions.hands
+hand = mp_hands.Hands(max_num_hands=1)
+
+
+led_map = {
+    1: {"led": 1, "note": 262},
+    2: {"led": 2, "note": 294},
+    3: {"led": 3, "note": 330},
+    4: {"led": 4, "note": 349},
+    5: {"led": 5, "note": 392},
+}
+
+last_finger_state = [0, 0, 0, 0, 0]
+
+def fingers_up(hand_landmarks):
+    fingers = [0,0,0,0,0]
+
+    wrist = hand_landmarks.landmark[0]
+    thumb_tip = hand_landmarks.landmark[4]
+    index_mcp = hand_landmarks.landmark[5]
+
+
+    if math.hypot(thumb_tip.x - wrist.x, thumb_tip.y - wrist.y) > math.hypot(index_mcp.x - wrist.x, index_mcp.y - wrist.y):
+        fingers[0] = 1
+
+
+    index_tip = hand_landmarks.landmark[8]
+    index_pip = hand_landmarks.landmark[6]
+    index_mcp = hand_landmarks.landmark[5]
+    if index_tip.y < index_pip.y and index_tip.y < index_mcp.y:
+        fingers[1] = 1
+
+
+    middle_tip = hand_landmarks.landmark[12]
+    middle_pip = hand_landmarks.landmark[10]
+    middle_mcp = hand_landmarks.landmark[9]
+    if middle_tip.y < middle_pip.y and middle_tip.y < middle_mcp.y:
+        fingers[2] = 1
+
+
+    ring_tip = hand_landmarks.landmark[16]
+    ring_pip = hand_landmarks.landmark[14]
+    ring_mcp = hand_landmarks.landmark[13]
+    if ring_tip.y < ring_pip.y and ring_tip.y < ring_mcp.y:
+        fingers[3] = 1
+
+
+    pinky_tip = hand_landmarks.landmark[20]
+    pinky_pip = hand_landmarks.landmark[18]
+    pinky_mcp = hand_landmarks.landmark[17]
+    if pinky_tip.y < pinky_pip.y and pinky_tip.y < pinky_mcp.y:
+        fingers[4] = 1
+
+    return fingers
+
+while True:
+    success, frame = cap.read()
+    if not success:
+        continue
+
+    frame_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+    result = hand.process(frame_rgb)
+
+    finger_state = [0,0,0,0,0]
+
+    if result.multi_hand_landmarks:
+        hand_landmarks = result.multi_hand_landmarks[0]
+
+
+        mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+        finger_state = fingers_up(hand_landmarks)
+        leds_to_send = []
+        notes_to_send = []
+
+
+        T, I, M, R, P = finger_state
+
+
+        if finger_state == [0,1,0,0,0]:
+            leds_to_send = [str(led_map[1]["led"])]
+            notes_to_send = [str(led_map[1]["note"])]
+        elif finger_state == [0,1,1,0,0]:
+            leds_to_send = [str(led_map[2]["led"])]
+            notes_to_send = [str(led_map[2]["note"])]
+        elif finger_state == [1,1,1,0,0]:
+            leds_to_send = [str(led_map[3]["led"])]
+            notes_to_send = [str(led_map[3]["note"])]
+        elif finger_state == [0,1,1,1,1]:
+            leds_to_send = [str(led_map[4]["led"])]
+            notes_to_send = [str(led_map[4]["note"])]
+        elif finger_state == [1,1,1,1,1]:
+            leds_to_send = [str(led_map[5]["led"])]
+            notes_to_send = [str(led_map[5]["note"])]
+
+
+        if finger_state != last_finger_state:
+            led_str = ",".join(leds_to_send)
+            note_str = ",".join(notes_to_send)
+            arduino.write(f"LED:{led_str}\n".encode())
+            arduino.write(f"NOTE:{note_str}\n".encode())
+            last_finger_state = finger_state
+
+        print(f"Fingers: {finger_state}, LEDs: {led_str if leds_to_send else 'None'}, Notes: {note_str if notes_to_send else 'None'}")
+
+        # Legenda sul video
+        legend_y = 30
+        cv.putText(frame, "1 -> Index (Blue)", (10, legend_y), cv.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        cv.putText(frame, "2 -> Index + Middle (Green)", (10, legend_y + 25), cv.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        cv.putText(frame, "3 -> Thumb + Index + Middle (Red)", (10, legend_y + 50), cv.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        cv.putText(frame, "4 -> Index + Middle + Ring + Pinky (Yellow)", (10, legend_y + 75), cv.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        cv.putText(frame, "5 -> All fingers (White)", (10, legend_y + 100), cv.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+    cv.imshow("Finger LED + Buzzer", frame)
+    if cv.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv.destroyAllWindows()
+
+
